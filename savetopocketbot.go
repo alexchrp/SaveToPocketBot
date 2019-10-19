@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"log"
 	"net/http"
@@ -11,12 +12,17 @@ import (
 	"strconv"
 )
 
+var (
+	URL             = "https://api.telegram.org/bot" + os.Getenv("TOKEN") + "/"
+	ResponseHeaders = map[string]string{"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Origin, X-Requested-With, Content-Type, Accept"}
+)
+
 type Event struct {
 	Message Message `json:"message"`
 }
 
 type Message struct {
-	User                 User   `json:"user"`
+	User                 User   `json:"from"`
 	ForwardFromUser      User   `json:"forward_from"`
 	Chat                 Chat   `json:"chat"`
 	ForwardFromChat      Chat   `json:"forward_from_chat"`
@@ -27,6 +33,7 @@ type Message struct {
 type User struct {
 	Id        int    `json:"id"`
 	FirstName string `json:"first_name"`
+	Username  string `json:"username"`
 }
 
 type Chat struct {
@@ -36,21 +43,31 @@ type Chat struct {
 	Username string `json:"username"`
 }
 
-var URL = "https://api.telegram.org/bot" + os.Getenv("TOKEN") + "/"
+type ReceivedEvent struct {
+	Body string `json:"body"`
+}
 
 func sendMessage(text, chatId string) {
 	finalText := "You said: " + text
 	url := fmt.Sprintf("%ssendMessage?text=%s&chat_id=%s", URL, finalText, chatId)
-	_, _ = http.Get(url)
+	result, _ := http.Get(url)
+	log.Println("Send message result: ", result)
 }
 
-func HandleRequest(ctx context.Context, event Event) (string, error) {
-	message := event.Message
-	bytes, _ := json.Marshal(event)
-	log.Println("Message received = ", string(bytes))
+func parseMessage(receivedEvent ReceivedEvent) Message {
+	var event Event
+	err := json.Unmarshal([]byte(receivedEvent.Body), &event)
+	if err != nil {
+		log.Printf("err was %v", err)
+	}
+	return event.Message
+}
+
+func HandleRequest(ctx context.Context, receivedEvent ReceivedEvent) (events.APIGatewayProxyResponse, error) {
+	message := parseMessage(receivedEvent)
 	chatId := message.Chat.Id
 	sendMessage(message.Text, strconv.Itoa(chatId))
-	return "'statusCode': 200", nil
+	return events.APIGatewayProxyResponse{StatusCode: 200, Headers: ResponseHeaders}, nil
 }
 
 func main() {
