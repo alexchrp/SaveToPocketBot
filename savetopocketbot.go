@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/aws/aws-lambda-go/events"
@@ -17,7 +16,11 @@ var (
 	ResponseHeaders = map[string]string{"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Origin, X-Requested-With, Content-Type, Accept"}
 )
 
-type Event struct {
+type ReceivedEvent struct {
+	Body string `json:"body"`
+}
+
+type Body struct {
 	Message Message `json:"message"`
 }
 
@@ -43,10 +46,6 @@ type Chat struct {
 	Username string `json:"username"`
 }
 
-type ReceivedEvent struct {
-	Body string `json:"body"`
-}
-
 func sendMessage(text, chatId string) {
 	finalText := "You said: " + text
 	url := fmt.Sprintf("%ssendMessage?text=%s&chat_id=%s", URL, finalText, chatId)
@@ -55,7 +54,7 @@ func sendMessage(text, chatId string) {
 }
 
 func parseMessage(receivedEvent ReceivedEvent) Message {
-	var event Event
+	var event Body
 	err := json.Unmarshal([]byte(receivedEvent.Body), &event)
 	if err != nil {
 		log.Printf("err was %v", err)
@@ -63,7 +62,7 @@ func parseMessage(receivedEvent ReceivedEvent) Message {
 	return event.Message
 }
 
-func HandleRequest(ctx context.Context, receivedEvent ReceivedEvent) (events.APIGatewayProxyResponse, error) {
+func HandleRequest(receivedEvent ReceivedEvent) (events.APIGatewayProxyResponse, error) {
 	message := parseMessage(receivedEvent)
 	chatId := message.Chat.Id
 	sendMessage(message.Text, strconv.Itoa(chatId))
