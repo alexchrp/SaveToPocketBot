@@ -1,2 +1,5 @@
 .idea
+.serverless
 SendToPocketBot.iml
+bin
+config.prod.json

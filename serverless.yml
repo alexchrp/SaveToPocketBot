@@ -1,0 +1,29 @@
+service: save-to-pocket-bot-lambda
+
+frameworkVersion: '>=1.28.0 <2.0.0'
+
+provider:
+  name: aws
+  runtime: go1.x
+  stage: prod
+  region: eu-central-1
+
+package:
+  exclude:
+    - ./**
+  include:
+    - ./bin/**
+
+functions:
+  bot:
+    handler: bin/savetopocketbot
+    events:
+      - http:
+          path: /
+          method: any
+    memorySize: 128
+    timeout: 3
+    reservedConcurrency: 1
+    environment:
+      TOKEN: ${file(config.${self:provider.stage}.json):token}
+      POCKET_TOKEN_TABLE: ${file(config.${self:provider.stage}.json):pocket-token-table}
