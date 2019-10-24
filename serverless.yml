@@ -25,5 +25,6 @@ functions:
     timeout: 3
     reservedConcurrency: 1
     environment:
-      TOKEN: ${file(config.${self:provider.stage}.json):token}
+      TG_TOKEN: ${file(config.${self:provider.stage}.json):tg-token}
+      POCKET_CONSUMER_KEY: ${file(config.${self:provider.stage}.json):pocket-consumer-key}
       POCKET_TOKEN_TABLE: ${file(config.${self:provider.stage}.json):pocket-token-table}

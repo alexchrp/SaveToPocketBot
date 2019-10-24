@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/aws/aws-lambda-go/events"
@@ -9,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -16,11 +18,15 @@ import (
 )
 
 var (
-	tgUrl            = "https://api.telegram.org/bot" + os.Getenv("TOKEN") + "/"
-	responseHeaders  = map[string]string{"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Origin, X-Requested-With, Content-Type, Accept"}
-	ss, _            = session.NewSession(aws.NewConfig().WithRegion("eu-central-1"))
-	db               = dynamodb.New(ss)
-	pocketTokenTable = os.Getenv("POCKET_TOKEN_TABLE")
+	tgUrl             = "https://api.telegram.org/bot" + os.Getenv("TG_TOKEN") + "/"
+	responseHeaders   = map[string]string{"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Origin, X-Requested-With, Content-Type, Accept"}
+	ss, _             = session.NewSession(aws.NewConfig().WithRegion("eu-central-1"))
+	db                = dynamodb.New(ss)
+	pocketTokenTable  = os.Getenv("POCKET_TOKEN_TABLE")
+	pocketGetCodeUrl  = "https://getpocket.com/v3/oauth/request"
+	pocketConsumerKey = os.Getenv("POCKET_CONSUMER_KEY")
+	pocketRedirectUri = "https://telegram.me/SaveToPocketBot?start="
+	pocketAuthUrl     = "https://getpocket.com/auth/authorize?request_token=%s&redirect_uri=" + pocketRedirectUri
 )
 
 type Body struct {
@@ -72,24 +78,38 @@ func HandleRequest(request events.APIGatewayProxyRequest) (events.APIGatewayProx
 }
 
 func processMessage(message Message) {
-	chatId := message.Chat.Id
-	if message.Text == "/start" {
-		createPocketApiToken(message.User)
+	chatId := strconv.Itoa(message.Chat.Id)
+	text := message.Text
+	user := message.User
+	var e error
+	if text == "/start" {
+		e = createPocketApiToken(user, chatId)
+	} else if text == "/authorize" {
+		e = createUserCode(user, chatId)
+	} else {
+		sendMessage(text, chatId)
 	}
-	sendMessage(message.Text, strconv.Itoa(chatId))
+	if e != nil {
+		log.Println("Error = ", e)
+	}
 }
 
-type UserToken struct {
-	Id    string `json:"id"`
-	Token string `json:"token"`
+func createUserCode(user User, chatId string) error {
+	code, e := getUserCode()
+	if e != nil {
+		return e
+	}
+	log.Println("Code = ", code)
+	e = saveCode(user, code)
+	if e != nil {
+		return e
+	}
+	sendAuthUrlAndInstruction(code, chatId)
+	return nil
 }
 
-func createPocketApiToken(user User) {
-	token, err := createToken(user)
-	if err != nil {
-
-	}
-	item := UserToken{strconv.Itoa(user.Id), token}
+func saveCode(user User, code string) error {
+	item := UserToken{strconv.Itoa(user.Id), "", code}
 	av, err := dynamodbattribute.MarshalMap(item)
 	input := &dynamodb.PutItemInput{
 		TableName: aws.String(pocketTokenTable),
@@ -99,11 +119,135 @@ func createPocketApiToken(user User) {
 	if err != nil {
 		fmt.Println("Got error calling PutItem:")
 		fmt.Println(err.Error())
+		return err
 	}
+	return nil
 }
 
-func createToken(user User) (string, error) {
-	return "testToken", nil
+func sendAuthUrlAndInstruction(token, chatId string) {
+	sendMessage(fmt.Sprintf(pocketAuthUrl, token)+"\n authorize you pocket via this url, "+
+		"then you will be redirected back to bot and "+
+		"need to press start, if redirection fails, then just send /start manually", chatId)
+}
+
+type UserToken struct {
+	Id    string `json:"id"`
+	Token string `json:"token"`
+	Code  string `json:"code"`
+}
+
+func createPocketApiToken(user User, chatId string) error {
+	var userToken UserToken
+	if userToken, err := getUserToken(user); err != nil {
+		log.Println("Error on getting user userToken:", err)
+	} else if userToken == nil {
+		e := createUserCode(user, chatId)
+		return e
+	} else if len(userToken.Token) > 0 {
+		sendMessage("you have already been authorized", chatId)
+	}
+	code := userToken.Code
+	t, err := createToken(code)
+	if err != nil {
+		fmt.Println("Got error on getting token from pocket:")
+		fmt.Println(err.Error())
+		return err
+	}
+	item := UserToken{strconv.Itoa(user.Id), t, code}
+	av, err := dynamodbattribute.MarshalMap(item)
+	input := &dynamodb.PutItemInput{
+		TableName: aws.String(pocketTokenTable),
+		Item:      av,
+	}
+	_, err = db.PutItem(input)
+	if err != nil {
+		fmt.Println("Got error calling PutItem:")
+		fmt.Println(err.Error())
+		return err
+	}
+	sendMessage("You have been authorized successfully", chatId)
+	return nil
+}
+
+func getUserCode() (string, error) {
+	authBody, _ := json.Marshal(map[string]string{
+		"consumer_key": pocketConsumerKey,
+		"redirect_uri": pocketRedirectUri,
+	})
+
+	req, err := http.NewRequest("POST", pocketGetCodeUrl, bytes.NewBuffer(authBody))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
+	req.Header.Set("X-Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := ioutil.ReadAll(resp.Body)
+
+	var f interface{}
+	err = json.Unmarshal(body, f)
+	if err != nil {
+		return "", err
+	}
+	m := f.(map[string]string)
+	return m["code"], nil
+}
+
+func createToken(code string) (string, error) {
+	authBody, _ := json.Marshal(map[string]string{
+		"consumer_key": pocketConsumerKey,
+		"code":         code,
+	})
+
+	req, err := http.NewRequest("POST", pocketGetCodeUrl, bytes.NewBuffer(authBody))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
+	req.Header.Set("X-Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := ioutil.ReadAll(resp.Body)
+
+	var f interface{}
+	err = json.Unmarshal(body, f)
+	if err != nil {
+		return "", err
+	}
+	m := f.(map[string]string)
+	return m["access_token"], nil
+}
+
+func getUserToken(user User) (*UserToken, error) {
+	input := &dynamodb.GetItemInput{
+		TableName: aws.String(pocketTokenTable),
+		Key: map[string]*dynamodb.AttributeValue{
+			"id": {
+				N: aws.String(strconv.Itoa(user.Id)),
+			},
+		},
+	}
+	tokenResult, err := db.GetItem(input)
+	if err != nil {
+		return nil, err
+	}
+	resultItem := tokenResult.Item
+	if resultItem == nil {
+		return nil, nil
+	}
+	item := UserToken{}
+	err = dynamodbattribute.UnmarshalMap(resultItem, &item)
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
 }
 
 func main() {
