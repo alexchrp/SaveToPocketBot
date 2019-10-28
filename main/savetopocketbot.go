@@ -13,17 +13,19 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 )
 
 var (
-	tgUrl             = "https://api.telegram.org/bot" + os.Getenv("TG_TOKEN") + "/"
+	tgUrl             = "https://api.telegram.org/"
 	responseHeaders   = map[string]string{"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Origin, X-Requested-With, Content-Type, Accept"}
 	ss, _             = session.NewSession(aws.NewConfig().WithRegion("eu-central-1"))
 	db                = dynamodb.New(ss)
 	pocketTokenTable  = os.Getenv("POCKET_TOKEN_TABLE")
 	pocketGetCodeUrl  = "https://getpocket.com/v3/oauth/request"
+	pocketGetTokenUrl = "https://getpocket.com/v3/oauth/authorize"
 	pocketConsumerKey = os.Getenv("POCKET_CONSUMER_KEY")
 	pocketRedirectUri = "https://telegram.me/SaveToPocketBot?start="
 	pocketAuthUrl     = "https://getpocket.com/auth/authorize?request_token=%s&redirect_uri=" + pocketRedirectUri
@@ -56,9 +58,17 @@ type Chat struct {
 }
 
 func sendMessage(text, chatId string) {
-	finalText := "You said: " + text
-	url := fmt.Sprintf("%ssendMessage?text=%s&chat_id=%s", tgUrl, finalText, chatId)
-	result, _ := http.Get(url)
+	var sendUrl *url.URL
+	sendUrl, err := url.Parse(tgUrl)
+	if err != nil {
+		log.Println("Error parsing url", err)
+	}
+	sendUrl.Path += "bot" + os.Getenv("TG_TOKEN") + "/" + "sendMessage"
+	parameters := url.Values{}
+	parameters.Add("text", text)
+	parameters.Add("chat_id", chatId)
+	sendUrl.RawQuery = parameters.Encode()
+	result, _ := http.Get(sendUrl.String())
 	log.Println("Send message result: ", result)
 }
 
@@ -125,7 +135,7 @@ func saveCode(user User, code string) error {
 }
 
 func sendAuthUrlAndInstruction(token, chatId string) {
-	sendMessage(fmt.Sprintf(pocketAuthUrl, token)+"\n authorize you pocket via this url, "+
+	sendMessage(fmt.Sprintf(pocketAuthUrl, token)+" Authorize you pocket via this url, "+
 		"then you will be redirected back to bot and "+
 		"need to press start, if redirection fails, then just send /start manually", chatId)
 }
@@ -137,8 +147,8 @@ type UserToken struct {
 }
 
 func createPocketApiToken(user User, chatId string) error {
-	var userToken UserToken
-	if userToken, err := getUserToken(user); err != nil {
+	userToken, err := getUserToken(user)
+	if err != nil {
 		log.Println("Error on getting user userToken:", err)
 	} else if userToken == nil {
 		e := createUserCode(user, chatId)
@@ -169,6 +179,11 @@ func createPocketApiToken(user User, chatId string) error {
 	return nil
 }
 
+type UserCodeResponse struct {
+	Code  string `json:"code"`
+	State string `json:"state"`
+}
+
 func getUserCode() (string, error) {
 	authBody, _ := json.Marshal(map[string]string{
 		"consumer_key": pocketConsumerKey,
@@ -188,13 +203,19 @@ func getUserCode() (string, error) {
 	defer resp.Body.Close()
 	body, _ := ioutil.ReadAll(resp.Body)
 
-	var f interface{}
-	err = json.Unmarshal(body, f)
+	log.Println("Response body:", string(body))
+
+	var f = UserCodeResponse{}
+	err = json.Unmarshal(body, &f)
 	if err != nil {
 		return "", err
 	}
-	m := f.(map[string]string)
-	return m["code"], nil
+	return f.Code, nil
+}
+
+type UserTokenResponse struct {
+	AccessToken string `json:"access_token"`
+	Username    string `json:"username"`
 }
 
 func createToken(code string) (string, error) {
@@ -203,7 +224,7 @@ func createToken(code string) (string, error) {
 		"code":         code,
 	})
 
-	req, err := http.NewRequest("POST", pocketGetCodeUrl, bytes.NewBuffer(authBody))
+	req, err := http.NewRequest("POST", pocketGetTokenUrl, bytes.NewBuffer(authBody))
 	if err != nil {
 		return "", err
 	}
@@ -216,13 +237,15 @@ func createToken(code string) (string, error) {
 	defer resp.Body.Close()
 	body, _ := ioutil.ReadAll(resp.Body)
 
-	var f interface{}
-	err = json.Unmarshal(body, f)
+	log.Println("Response body:", string(body))
+	log.Println("Error:", resp.Header.Get("X-Error"))
+
+	var f = UserTokenResponse{}
+	err = json.Unmarshal(body, &f)
 	if err != nil {
 		return "", err
 	}
-	m := f.(map[string]string)
-	return m["access_token"], nil
+	return f.AccessToken, nil
 }
 
 func getUserToken(user User) (*UserToken, error) {
@@ -230,7 +253,7 @@ func getUserToken(user User) (*UserToken, error) {
 		TableName: aws.String(pocketTokenTable),
 		Key: map[string]*dynamodb.AttributeValue{
 			"id": {
-				N: aws.String(strconv.Itoa(user.Id)),
+				S: aws.String(strconv.Itoa(user.Id)),
 			},
 		},
 	}
