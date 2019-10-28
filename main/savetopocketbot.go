@@ -27,7 +27,7 @@ var (
 	pocketGetCodeUrl  = "https://getpocket.com/v3/oauth/request"
 	pocketGetTokenUrl = "https://getpocket.com/v3/oauth/authorize"
 	pocketConsumerKey = os.Getenv("POCKET_CONSUMER_KEY")
-	pocketRedirectUri = "https://telegram.me/SaveToPocketBot?start="
+	pocketRedirectUri = os.Getenv("TG_REDIRECT_URL")
 	pocketAuthUrl     = "https://getpocket.com/auth/authorize?request_token=%s&redirect_uri=" + pocketRedirectUri
 )
 

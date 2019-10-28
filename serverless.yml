@@ -28,3 +28,4 @@ functions:
       TG_TOKEN: ${file(config.${self:provider.stage}.json):tg-token}
       POCKET_CONSUMER_KEY: ${file(config.${self:provider.stage}.json):pocket-consumer-key}
       POCKET_TOKEN_TABLE: ${file(config.${self:provider.stage}.json):pocket-token-table}
+      TG_REDIRECT_URL: ${file(config.${self:provider.stage}.json):tg-redirect-url}
