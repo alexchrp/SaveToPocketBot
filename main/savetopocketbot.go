@@ -82,7 +82,9 @@ func parseMessage(body string) Message {
 }
 
 func HandleRequest(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	message := parseMessage(request.Body)
+	body := request.Body
+	log.Println("Received message = ", body)
+	message := parseMessage(body)
 	processMessage(message)
 	return events.APIGatewayProxyResponse{StatusCode: 200, Headers: responseHeaders}, nil
 }
@@ -92,16 +94,29 @@ func processMessage(message Message) {
 	text := message.Text
 	user := message.User
 	var e error
+	chat := message.ForwardFromChat
 	if text == "/start" {
 		e = createPocketApiToken(user, chatId)
 	} else if text == "/authorize" {
 		e = createUserCode(user, chatId)
+	} else if chat.Type == "channel" {
+		messageLink := getMessageLinkInChannel(chat, message.ForwardFromMessageId)
+		log.Println("messageLink = ", messageLink)
+		addToPocket(messageLink, chat.Title)
 	} else {
 		sendMessage(text, chatId)
 	}
 	if e != nil {
 		log.Println("Error = ", e)
 	}
+}
+
+func addToPocket(messageLink string, title string) {
+
+}
+
+func getMessageLinkInChannel(chat Chat, messageId int) string {
+	return "https://t.me/" + chat.Username + "/" + strconv.Itoa(messageId) + "?embed=2"
 }
 
 func createUserCode(user User, chatId string) error {
