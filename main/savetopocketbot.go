@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -25,6 +26,7 @@ var (
 	db                = dynamodb.New(ss)
 	pocketTokenTable  = os.Getenv("POCKET_TOKEN_TABLE")
 	pocketGetCodeUrl  = "https://getpocket.com/v3/oauth/request"
+	pocketAddUrl      = "https://getpocket.com/v3/add"
 	pocketGetTokenUrl = "https://getpocket.com/v3/oauth/authorize"
 	pocketConsumerKey = os.Getenv("POCKET_CONSUMER_KEY")
 	pocketRedirectUri = os.Getenv("TG_REDIRECT_URL")
@@ -100,9 +102,7 @@ func processMessage(message Message) {
 	} else if text == "/authorize" {
 		e = createUserCode(user, chatId)
 	} else if chat.Type == "channel" {
-		messageLink := getMessageLinkInChannel(chat, message.ForwardFromMessageId)
-		log.Println("messageLink = ", messageLink)
-		addToPocket(messageLink, chat.Title)
+		addToPocketFromChannel(chat, message, user, chatId)
 	} else {
 		sendMessage(text, chatId)
 	}
@@ -111,12 +111,46 @@ func processMessage(message Message) {
 	}
 }
 
-func addToPocket(messageLink string, title string) {
+func addToPocketFromChannel(chat Chat, message Message, user User, chatId string) {
+	messageLink := getMessageLinkInChannel(chat, message.ForwardFromMessageId)
+	log.Println("messageLink = ", messageLink)
+	userToken, e := getUserToken(user)
+	if e != nil {
+		log.Println("Error on getting user token", e)
+	}
+	e = addToPocket(userToken.Token, messageLink, chat.Title)
+	if e == nil {
+		sendMessage("Added successfully", chatId)
+	}
+}
+
+func addToPocket(userToken string, messageLink string, title string) error {
+	addBody, _ := json.Marshal(map[string]string{
+		"url":          messageLink,
+		"title":        title,
+		"consumer_key": pocketConsumerKey,
+		"access_token": userToken,
+	})
+
+	req, err := http.NewRequest("POST", pocketAddUrl, bytes.NewBuffer(addBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
+	req.Header.Set("X-Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != 200 {
+		return errors.New("error response on adding item")
+	}
+	return nil
 
 }
 
 func getMessageLinkInChannel(chat Chat, messageId int) string {
-	return "https://t.me/" + chat.Username + "/" + strconv.Itoa(messageId) + "?embed=2"
+	return "https://t.me/" + chat.Username + "/" + strconv.Itoa(messageId) + "?embed=1&userpic=true"
 }
 
 func createUserCode(user User, chatId string) error {
