@@ -38,12 +38,19 @@ type Body struct {
 }
 
 type Message struct {
-	User                 User   `json:"from"`
-	ForwardFromUser      User   `json:"forward_from"`
-	Chat                 Chat   `json:"chat"`
-	ForwardFromChat      Chat   `json:"forward_from_chat"`
-	ForwardFromMessageId int    `json:"forward_from_message_id"`
-	Text                 string `json:"text"`
+	User                 User            `json:"from"`
+	ForwardFromUser      User            `json:"forward_from"`
+	Chat                 Chat            `json:"chat"`
+	ForwardFromChat      Chat            `json:"forward_from_chat"`
+	ForwardFromMessageId int             `json:"forward_from_message_id"`
+	Text                 string          `json:"text"`
+	Entities             []MessageEntity `json:"entities"`
+}
+
+type MessageEntity struct {
+	Offset int    `json:"offset"`
+	Length int    `json:"length"`
+	Type   string `json:"type"`
 }
 
 type User struct {
@@ -103,12 +110,44 @@ func processMessage(message Message) {
 		e = createUserCode(user, chatId)
 	} else if chat.Type == "channel" {
 		addToPocketFromChannel(chat, message, user, chatId)
+	} else if len(message.Entities) > 0 {
+		urls := filterUrls(message.Entities, message.Text)
+		if len(urls) > 0 {
+			addToPocketFromLinks(urls, user, chatId)
+		}
 	} else {
-		sendMessage(text, chatId)
+		sendMessage("No items found, this bot accepts messages from channels or links", chatId)
 	}
 	if e != nil {
 		log.Println("Error = ", e)
 	}
+}
+
+func addToPocketFromLinks(urls []string, user User, chatId string) {
+	userToken, e := getUserToken(user)
+	if e != nil {
+		log.Println("Error on getting user token", e)
+	}
+	for _, link := range urls {
+		log.Println("Adding link = ", link)
+		e = addToPocket(userToken.Token, link)
+		if e == nil {
+			sendMessage(link+" was added successfully", chatId)
+		}
+	}
+}
+
+func filterUrls(entities []MessageEntity, text string) (out []string) {
+	urls := map[string]bool{}
+	for _, entity := range entities {
+		if entity.Type == "url" {
+			urls[text[entity.Offset:entity.Offset+entity.Length]] = true
+		}
+	}
+	for link := range urls {
+		out = append(out, link)
+	}
+	return
 }
 
 func addToPocketFromChannel(chat Chat, message Message, user User, chatId string) {
@@ -118,19 +157,32 @@ func addToPocketFromChannel(chat Chat, message Message, user User, chatId string
 	if e != nil {
 		log.Println("Error on getting user token", e)
 	}
-	e = addToPocket(userToken.Token, messageLink, chat.Title)
+	e = addToPocketWithTitle(userToken.Token, messageLink, chat.Title)
 	if e == nil {
-		sendMessage("Added successfully", chatId)
+		sendMessage(messageLink+" was added successfully", chatId)
 	}
 }
 
-func addToPocket(userToken string, messageLink string, title string) error {
-	addBody, _ := json.Marshal(map[string]string{
-		"url":          messageLink,
-		"title":        title,
-		"consumer_key": pocketConsumerKey,
-		"access_token": userToken,
-	})
+func addToPocket(userToken string, messageLink string) error {
+	return addToPocketWithTitle(userToken, messageLink, "")
+}
+
+func addToPocketWithTitle(userToken string, messageLink string, title string) error {
+	var addBody []byte
+	if len(title) > 0 {
+		addBody, _ = json.Marshal(map[string]string{
+			"url":          messageLink,
+			"title":        title,
+			"consumer_key": pocketConsumerKey,
+			"access_token": userToken,
+		})
+	} else {
+		addBody, _ = json.Marshal(map[string]string{
+			"url":          messageLink,
+			"consumer_key": pocketConsumerKey,
+			"access_token": userToken,
+		})
+	}
 
 	req, err := http.NewRequest("POST", pocketAddUrl, bytes.NewBuffer(addBody))
 	if err != nil {
