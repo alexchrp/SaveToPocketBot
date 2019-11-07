@@ -17,9 +17,11 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 )
 
 var (
+	botName           = "SaveToPocketBot"
 	tgUrl             = "https://api.telegram.org/"
 	responseHeaders   = map[string]string{"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Origin, X-Requested-With, Content-Type, Accept"}
 	ss, _             = session.NewSession(aws.NewConfig().WithRegion("eu-central-1"))
@@ -130,7 +132,7 @@ func addToPocketFromLinks(urls []string, user User, chatId string) {
 	}
 	for _, link := range urls {
 		log.Println("Adding link = ", link)
-		e = addToPocket(userToken.Token, link)
+		e = addToPocket(userToken.Token, link, []string{botName})
 		if e == nil {
 			sendMessage(link+" was added successfully", chatId)
 		}
@@ -157,32 +159,29 @@ func addToPocketFromChannel(chat Chat, message Message, user User, chatId string
 	if e != nil {
 		log.Println("Error on getting user token", e)
 	}
-	e = addToPocketWithTitle(userToken.Token, messageLink, chat.Title)
+	e = addToPocketWithTitle(userToken.Token, messageLink, []string{chat.Title, botName}, chat.Title)
 	if e == nil {
 		sendMessage(messageLink+" was added successfully", chatId)
 	}
 }
 
-func addToPocket(userToken string, messageLink string) error {
-	return addToPocketWithTitle(userToken, messageLink, "")
+func addToPocket(userToken string, messageLink string, tags []string) error {
+	return addToPocketWithTitle(userToken, messageLink, tags, "")
 }
 
-func addToPocketWithTitle(userToken string, messageLink string, title string) error {
-	var addBody []byte
-	if len(title) > 0 {
-		addBody, _ = json.Marshal(map[string]string{
-			"url":          messageLink,
-			"title":        title,
-			"consumer_key": pocketConsumerKey,
-			"access_token": userToken,
-		})
-	} else {
-		addBody, _ = json.Marshal(map[string]string{
-			"url":          messageLink,
-			"consumer_key": pocketConsumerKey,
-			"access_token": userToken,
-		})
+func addToPocketWithTitle(userToken string, messageLink string, tags []string, title string) error {
+	properties := map[string]string{
+		"url":          messageLink,
+		"consumer_key": pocketConsumerKey,
+		"access_token": userToken,
 	}
+	if len(title) > 0 {
+		properties["title"] = title
+	}
+	if len(tags) > 0 {
+		properties["tags"] = strings.Join(tags, ",")
+	}
+	addBody, _ := json.Marshal(properties)
 
 	req, err := http.NewRequest("POST", pocketAddUrl, bytes.NewBuffer(addBody))
 	if err != nil {
