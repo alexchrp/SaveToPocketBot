@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -33,6 +32,8 @@ var (
 	pocketConsumerKey = os.Getenv("POCKET_CONSUMER_KEY")
 	pocketRedirectUri = os.Getenv("TG_REDIRECT_URL")
 	pocketAuthUrl     = "https://getpocket.com/auth/authorize?request_token=%s&redirect_uri=" + pocketRedirectUri
+	authInfoMessage   = "Send /start to start authorization or send /stop to stop using bot."
+	noItemsMessage    = "No items found, this bot accepts messages from channels or links."
 )
 
 type Body struct {
@@ -108,34 +109,49 @@ func processMessage(message Message) {
 	chat := message.ForwardFromChat
 	if text == "/start" {
 		e = createPocketApiToken(user, chatId)
-	} else if text == "/authorize" {
-		e = createUserCode(user, chatId)
+	} else if text == "/stop" {
+		e = removePocketApiToken(user, chatId)
 	} else if chat.Type == "channel" {
-		addToPocketFromChannel(chat, message, user, chatId)
+		e = addToPocketFromChannel(chat, message, user, chatId)
 	} else if len(message.Entities) > 0 {
-		urls := filterUrls(message.Entities, message.Text)
-		if len(urls) > 0 {
-			addToPocketFromLinks(urls, user, chatId)
-		}
+		e = addToPocketFromLinks(message.Entities, message.Text, user, chatId)
 	} else {
-		sendMessage("No items found, this bot accepts messages from channels or links", chatId)
+		sendMessage(noItemsMessage, chatId)
 	}
 	if e != nil {
-		log.Println("Error = ", e)
+		processAddError(e, chatId)
 	}
 }
 
-func addToPocketFromLinks(urls []string, user User, chatId string) {
-	userToken, e := getUserToken(user)
-	if e != nil {
-		log.Println("Error on getting user token", e)
+func removePocketApiToken(user User, chatId string) error {
+	input := &dynamodb.DeleteItemInput{
+		TableName: aws.String(pocketTokenTable),
+		Key: map[string]*dynamodb.AttributeValue{
+			"id": {
+				S: aws.String(strconv.Itoa(user.Id)),
+			},
+		},
 	}
-	for _, link := range urls {
-		log.Println("Adding link = ", link)
-		e = addToPocket(userToken.Token, link, []string{botName})
-		if e == nil {
-			sendMessage(link+" was added successfully", chatId)
-		}
+	_, err := db.DeleteItem(input)
+	if err == nil {
+		sendMessage("You were successfully unauthorized", chatId)
+	}
+	return err
+}
+
+func processAddError(e error, chatId string) {
+	if e == nil {
+		return
+	}
+	switch e.(type) {
+	case *BadResponseError:
+		sendMessage("Pocket sent a response with error. Maybe a problem with authorization. "+authInfoMessage, chatId)
+	case *NoItemsFoundError:
+		sendMessage(noItemsMessage, chatId)
+	case *NoUserTokenError:
+		sendMessage("You need to be authorized. "+authInfoMessage, chatId)
+	default:
+		sendMessage("Unknown error.", chatId)
 	}
 }
 
@@ -152,17 +168,60 @@ func filterUrls(entities []MessageEntity, text string) (out []string) {
 	return
 }
 
-func addToPocketFromChannel(chat Chat, message Message, user User, chatId string) {
+func addToPocketFromLinks(entities []MessageEntity, text string, user User, chatId string) error {
+	urls := filterUrls(entities, text)
+	if len(urls) == 0 {
+		return &NoItemsFoundError{}
+	}
+	userToken, e := getUserToken(user)
+	if e != nil {
+		log.Println("Error on getting user token", e)
+		return e
+	}
+	for _, link := range urls {
+		log.Println("Adding link = ", link)
+		e = addToPocket(userToken.Token, link, []string{botName})
+		if e != nil {
+			return e
+		}
+		sendMessage(link+" was added successfully", chatId)
+	}
+	return nil
+}
+
+type NoItemsFoundError struct{}
+
+func (e *NoItemsFoundError) Error() string {
+	return fmt.Sprintf("Not user token")
+}
+
+type NoUserTokenError struct{}
+
+func (e *NoUserTokenError) Error() string {
+	return fmt.Sprintf("No user token")
+}
+
+type BadResponseError struct {
+	Code int
+}
+
+func (e *BadResponseError) Error() string {
+	return fmt.Sprintf("Bad response code: %d", e.Code)
+}
+
+func addToPocketFromChannel(chat Chat, message Message, user User, chatId string) error {
 	messageLink := getMessageLinkInChannel(chat, message.ForwardFromMessageId)
 	log.Println("messageLink = ", messageLink)
 	userToken, e := getUserToken(user)
 	if e != nil {
 		log.Println("Error on getting user token", e)
+		return e
 	}
 	e = addToPocketWithTitle(userToken.Token, messageLink, []string{chat.Title, botName}, chat.Title)
 	if e == nil {
 		sendMessage(messageLink+" was added successfully", chatId)
 	}
+	return e
 }
 
 func addToPocket(userToken string, messageLink string, tags []string) error {
@@ -193,8 +252,9 @@ func addToPocketWithTitle(userToken string, messageLink string, tags []string, t
 	if err != nil {
 		return err
 	}
+	log.Println("Error:", resp.Header.Get("X-Error"))
 	if resp.StatusCode != 200 {
-		return errors.New("error response on adding item")
+		return &BadResponseError{resp.StatusCode}
 	}
 	return nil
 
@@ -254,7 +314,7 @@ func createPocketApiToken(user User, chatId string) error {
 		e := createUserCode(user, chatId)
 		return e
 	} else if len(userToken.Token) > 0 {
-		sendMessage("you have already been authorized", chatId)
+		sendMessage("You have already been authorized, ", chatId)
 	}
 	code := userToken.Code
 	t, err := createToken(code)
@@ -340,6 +400,10 @@ func createToken(code string) (string, error) {
 	log.Println("Response body:", string(body))
 	log.Println("Error:", resp.Header.Get("X-Error"))
 
+	if resp.StatusCode != 200 {
+		return "", &BadResponseError{resp.StatusCode}
+	}
+
 	var f = UserTokenResponse{}
 	err = json.Unmarshal(body, &f)
 	if err != nil {
@@ -359,11 +423,11 @@ func getUserToken(user User) (*UserToken, error) {
 	}
 	tokenResult, err := db.GetItem(input)
 	if err != nil {
-		return nil, err
+		return nil, &NoUserTokenError{}
 	}
 	resultItem := tokenResult.Item
 	if resultItem == nil {
-		return nil, nil
+		return nil, &NoUserTokenError{}
 	}
 	item := UserToken{}
 	err = dynamodbattribute.UnmarshalMap(resultItem, &item)
