@@ -314,7 +314,8 @@ func createPocketApiToken(user User, chatId string) error {
 		e := createUserCode(user, chatId)
 		return e
 	} else if len(userToken.Token) > 0 {
-		sendMessage("You have already been authorized, ", chatId)
+		sendMessage("You have already been authorized.", chatId)
+		return nil
 	}
 	code := userToken.Code
 	t, err := createToken(code)
