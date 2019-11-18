@@ -295,7 +295,7 @@ func saveCode(user User, code string) error {
 }
 
 func sendAuthUrlAndInstruction(token, chatId string) {
-	sendMessage(fmt.Sprintf(pocketAuthUrl, token)+" Authorize you pocket via this url, "+
+	sendMessage(fmt.Sprintf(pocketAuthUrl, token)+" Authorize your pocket via this url, "+
 		"then you will be redirected back to bot and "+
 		"need to press start, if redirection fails, then just send /start manually", chatId)
 }
@@ -423,11 +423,11 @@ func getUserToken(user User) (*UserToken, error) {
 	}
 	tokenResult, err := db.GetItem(input)
 	if err != nil {
-		return nil, &NoUserTokenError{}
+		return nil, err
 	}
 	resultItem := tokenResult.Item
 	if resultItem == nil {
-		return nil, &NoUserTokenError{}
+		return nil, nil
 	}
 	item := UserToken{}
 	err = dynamodbattribute.UnmarshalMap(resultItem, &item)
