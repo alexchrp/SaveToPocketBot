@@ -159,13 +159,28 @@ func filterUrls(entities []MessageEntity, text string) (out []string) {
 	urls := map[string]bool{}
 	for _, entity := range entities {
 		if entity.Type == "url" {
-			urls[text[entity.Offset:entity.Offset+entity.Length]] = true
+			urls[getSubstring(text, entity.Offset, entity.Offset+entity.Length)] = true
 		}
 	}
 	for link := range urls {
 		out = append(out, link)
 	}
 	return
+}
+
+func getSubstring(s string, start int, end int) string {
+	startIndex := 0
+	i := 0
+	for j := range s {
+		if i == start {
+			startIndex = j
+		}
+		if i == end {
+			return s[startIndex:j]
+		}
+		i++
+	}
+	return s[startIndex:]
 }
 
 func addToPocketFromLinks(entities []MessageEntity, text string, user User, chatId string) error {
