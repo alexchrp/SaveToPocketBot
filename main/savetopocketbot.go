@@ -180,11 +180,11 @@ func addToPocketFromLinks(entities []MessageEntity, text string, user User, chat
 	}
 	for _, link := range urls {
 		log.Println("Adding link = ", link)
-		e = addToPocket(userToken.Token, link, []string{botName})
+		title, e := addToPocket(userToken.Token, link, []string{botName})
 		if e != nil {
 			return e
 		}
-		sendMessage(link+" was added successfully", chatId)
+		sendMessage("\""+title+"\" was added successfully", chatId)
 	}
 	return nil
 }
@@ -217,18 +217,20 @@ func addToPocketFromChannel(chat Chat, message Message, user User, chatId string
 		log.Println("Error on getting user token", e)
 		return e
 	}
-	e = addToPocketWithTitle(userToken.Token, messageLink, []string{chat.Title, botName}, chat.Title)
+	title, e := addToPocketWithTitle(userToken.Token, messageLink, []string{chat.Title, botName},
+		chat.Title)
 	if e == nil {
-		sendMessage(messageLink+" was added successfully", chatId)
+		sendMessage(title+" was added successfully", chatId)
 	}
 	return e
 }
 
-func addToPocket(userToken string, messageLink string, tags []string) error {
+func addToPocket(userToken string, messageLink string, tags []string) (string, error) {
 	return addToPocketWithTitle(userToken, messageLink, tags, "")
 }
 
-func addToPocketWithTitle(userToken string, messageLink string, tags []string, title string) error {
+func addToPocketWithTitle(userToken string, messageLink string, tags []string,
+	title string) (string, error) {
 	properties := map[string]string{
 		"url":          messageLink,
 		"consumer_key": pocketConsumerKey,
@@ -244,20 +246,34 @@ func addToPocketWithTitle(userToken string, messageLink string, tags []string, t
 
 	req, err := http.NewRequest("POST", pocketAddUrl, bytes.NewBuffer(addBody))
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
 	req.Header.Set("X-Accept", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
-	log.Println("Error:", resp.Header.Get("X-Error"))
+	log.Println("Response from pocket:", resp)
 	if resp.StatusCode != 200 {
-		return &BadResponseError{resp.StatusCode}
+		log.Println("Error:", resp.Header.Get("X-Error"))
+		return "", &BadResponseError{resp.StatusCode}
 	}
-	return nil
+	var f = PocketAddResponse{}
+	body, _ := ioutil.ReadAll(resp.Body)
+	err = json.Unmarshal(body, &f)
+	if err != nil {
+		return "", err
+	}
+	return f.Item.Title, nil
+}
 
+type PocketItem struct {
+	Title string `json:"title"`
+}
+
+type PocketAddResponse struct {
+	Item PocketItem `json:"item"`
 }
 
 func getMessageLinkInChannel(chat Chat, messageId int) string {
